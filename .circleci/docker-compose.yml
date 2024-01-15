@@ -1,0 +1,53 @@
+services:
+  app:
+    build: .
+    hostname: app.docker
+    environment:
+      APP_ENV: "test"
+      DATABASE_URL: "mysql://root:mysql@database/sylius_%kernel.environment%?charset=utf8mb4"
+      PHP_DATE_TIMEZONE: "Europe/Prague"
+      COMPOSER_HOME: "/tmp"
+      YARN_CACHE_FOLDER: "/tmp"
+      HOME: "/tmp"
+      XDEBUG_TRIGGER: "no"
+      XDEBUG_MODE: "off"
+      BEHAT_PARAMS: |
+        {
+            "extensions": {
+                "Behat\\MinkExtension": {
+                    "base_url": "https://app.docker:8081/",
+                    "sessions": {
+                        "chrome_headless": {
+                            "chrome": {
+                                "api_url": "http://chrome.docker:9222"
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    volumes:
+      - ../:/app
+    networks:
+      - sylius
+
+  mysql:
+    image: cimg/mysql:8.0
+    hostname: database
+    environment:
+      MYSQL_ROOT_PASSWORD: pass
+    networks:
+      - sylius
+
+  chrome:
+    # Thank you https://pplotka.dev/post/sylius-behat-scenarios-in-chrome-headless-inside-docker/
+    image: zenika/alpine-chrome
+    hostname: chrome.docker
+    shm_size: "2gb"
+    command: "--enable-automation --disable-gpu --disable-background-networking --no-default-browser-check --no-first-run --disable-popup-blocking --disable-default-apps --disable-translate --disable-extensions --no-sandbox --headless --remote-debugging-port=9222 --remote-debugging-address=0.0.0.0 --window-size=2880,1800 --proxy-server='direct://' --proxy-bypass-list='*' --disable-proxy-certificate-handler"
+    networks:
+      - sylius
+
+networks:
+  sylius:
+    driver: bridge

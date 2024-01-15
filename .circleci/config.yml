@@ -47,50 +47,37 @@ jobs:
                 type: string
             php_version:
                 type: string
-        docker:
-            -   image: webdevops/php-nginx:<< parameters.php_version >>
-                name: app
-                environment:
-                    - DATABASE_URL=mysql://root:pass_root@database:3306/3brs_sylius_payment_restriction_plugin_%kernel.environment%?serverVersion=8.0
-            -   image: cimg/mysql:8.0
-                name: database
-                environment:
-                    MYSQL_ROOT_PASSWORD: pass_root
-                    MYSQL_USER: sylius
-                    MYSQL_PASSWORD: pass
-            -   image: zenika/alpine-chrome
-                name: chrome
-                command: "--enable-automation --disable-gpu --disable-background-networking --no-default-browser-check --no-first-run --disable-popup-blocking --disable-default-apps --disable-translate --disable-extensions --no-sandbox --headless --remote-debugging-port=9222 --remote-debugging-address=0.0.0.0 --window-size=2880,1800 --proxy-server='direct://' --proxy-bypass-list='*' --disable-proxy-certificate-handler"
-
+        machine:
+            image: ubuntu-2204:2023.10.1
+            docker_layer_caching: true
+        environment:
+            PHP_VERSION: << parameters.php_version >>
+            SYLIUS_VERSION: << parameters.sylius_version >>
         steps:
             - checkout
-            # to avoid installing different package "Note, selecting 'cmdtest' instead of 'yarn'"
-            -   run: curl -sS https://dl.yarnpkg.com/debian/pubkey.gpg | apt-key add -
-            -   run: echo "deb https://dl.yarnpkg.com/debian/ stable main" | tee /etc/apt/sources.list.d/yarn.list
-            -   run: curl -fsSL https://deb.nodesource.com/setup_18.x | bash -
-            -   run: apt-get update
-                # netcat to get 'nc' command for waiting for database
-            -   run: apt-get install -y nodejs yarn mariadb-client netcat-traditional
-            -   run: composer self-update
-            -   run: curl -sS https://get.symfony.com/cli/installer | bash -s -- --install-dir="$(pwd)" && mv "$(pwd)"/symfony /usr/local/bin/symfony
-            -   run: symfony server:ca:install
+            -   run: docker build --build-arg PHP_VERSION=<< parameters.php_version >> ./.circleci
+            -   run: docker compose --file=./.circleci/docker-compose.yml up --detach
 
             # Sylius & Symfony in current matrix versions
-            -   run: composer require "sylius/sylius:<< parameters.sylius_version >>.*" --no-interaction --no-update --no-scripts
-            -   run: grep -o -E '"(symfony/[^"]+)"' composer.json | grep -v -E '(symfony/flex|symfony/webpack-encore-bundle)' | xargs printf '%s:<< parameters.symfony_version >>.* '| xargs composer require --no-interaction --no-update
+            -   run: docker compose --file=./.circleci/docker-compose.yml exec app bash -c 'bash ./.circleci/composer-require-sylius.sh'
+            -   run: docker compose --file=./.circleci/docker-compose.yml exec app bash -c '
+                    grep -o -E \'"(symfony/[^"]+)"\' composer.json | grep -v -E "(symfony/flex|symfony/webpack-encore-bundle)" | xargs printf "%s:<< parameters.symfony_version >>.* " | xargs composer require --no-interaction --no-update'
 
             -   run:
                     name: Wait for database
-                    command: timeout 60s bash -c -- 'while ! nc -z database 3306; do sleep 0.1; done' \
-                        && timeout 30s bash -c -- 'mysql --user=sylius --password=pass --host=database --port=3306 -e "exit"'
+                    command:  docker compose --file=./.circleci/docker-compose.yml exec app bash -c '
+                        timeout 60s bash -c -- "while ! nc -z database 3306; do sleep 0.1; done" \
+                        && timeout 30s bash -c -- 'mysql --user=root --password=pass --host=database --port=3306 -e "exit"'
 
             -   run:
                     name: Wait for Chrome
-                    command: timeout 60s bash -c -- 'while ! nc -z chrome 9222; do sleep 0.1; done'
+                    command:  docker compose --file=./.circleci/docker-compose.yml exec app bash -c '
+                        timeout 60s bash -c -- "while ! nc -z chrome 9222; do sleep 0.1; done"'
 
             # COMPOSER PREFER LOWEST (oldest possible) #
             # has to delete vendor for next test with different libraries version to avoid Composer error 'Failed to extract...' if vendor dir cache does not exist
-            -   run: rm -fr vendor composer.lock
+            -   run:  docker compose --file=./.circleci/docker-compose.yml exec app bash -c |
+                    rm -fr vendor composer.lock
             -   run: composer update --no-interaction --prefer-lowest --no-plugins
             -   run: yarn --cwd tests/Application install
             -   run: yarn --cwd tests/Application build
